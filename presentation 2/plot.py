@@ -1,0 +1,18 @@
+import matplotlib.pyplot as plt
+
+def compare_histories(history1, history2, label1="Model 1", label2="Model 2"):
+    plt.figure(figsize=(10, 6))
+    plt.plot(history1, label=label1, linestyle='-')
+    plt.plot(history2, label=label2, linestyle='-')
+    
+    plt.title("Model Accuracy Comparison")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.legend(loc="best")
+    plt.show()
+
+net_history_1 = [0.21266294227188082, 0.22756052141527003, 0.2404096834264432, 0.26890130353817504, 0.2797020484171322, 0.3005586592178771, 0.33147113594040967, 0.34916201117318435, 0.35940409683426444, 0.3804469273743017, 0.40912476722532587, 0.4186219739292365, 0.4251396648044693, 0.4491620111731844, 0.45344506517690875]
+net_history_2 = [0.2163873370577281, 0.2283054003724395, 0.24078212290502793, 0.2674115456238361, 0.2901303538175047, 0.30093109869646184, 0.3167597765363129, 0.3243947858472998, 0.3588454376163873, 0.3802607076350093, 0.4054003724394786, 0.3973929236499069, 0.42905027932960893, 0.44115456238361267, 0.4439478584729981]
+
+compare_histories(net_history_1, net_history_2, label1="Normalized", label2="Augmented + Normalized")
