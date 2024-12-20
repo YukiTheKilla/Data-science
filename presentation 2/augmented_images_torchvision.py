@@ -1,30 +1,18 @@
 import os
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 import numpy as np
-import pandas as pd 
 from fastai.vision.all import * 
-from fastai.metrics import accuracy
 from PIL import Image
-from PIL import ImageFile,ImageFilter
 import matplotlib.pyplot as plt 
-import torch 
-from torch import nn, optim
-import torch.nn.functional as F
+from torch import optim
 from tqdm import tqdm 
-from IPython.display import clear_output 
 import warnings 
 from pathlib import Path
 import torch
-import torchvision
 import torchvision.transforms as transforms
-from torch.utils.data import TensorDataset, DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset
 from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split
-import optuna
-from sklearn.metrics import confusion_matrix
-import seaborn as sns
 from torch.cuda.amp import GradScaler, autocast
-import random
 warnings.filterwarnings("ignore")
 # setting device on GPU if available, else CPU
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -35,6 +23,7 @@ def print_history(history, title):
     plt.title(title)
     plt.ylabel('Accuracy')
     plt.xlabel('Epoch')
+    
 class MushroomDataset(Dataset):
     def __init__(self, data_path, transform=None):
         self.data_path = data_path
@@ -56,44 +45,32 @@ class MushroomDataset(Dataset):
 
     def __len__(self):
         return len(self.images)
-    
+
     def __getitem__(self, idx):
         img_path = self.images[idx]
         label = self.encoded_labels[idx]
         try:
             img = Image.open(img_path).convert('RGB').resize((96, 96))
-            
-            # Аугментация 1: Гауссово размытие
-            gaussian_blur_img = img.filter(ImageFilter.GaussianBlur(radius=random.uniform(0.5, 2.0)))
-            
-            # Аугментация 2: Поворот
-            rotated_img = img.rotate(random.uniform(-90, 90))
-            
             if self.transform:
                 img = self.transform(img)
-                gaussian_blur_img = self.transform(gaussian_blur_img)
-                rotated_img = self.transform(rotated_img)
-                
-        except Exception as e:
-            print(f"Error loading image {img_path}: {e}, returning white image.")
-            img = torch.ones((3, 96, 96)) * 255  # Белое изображение
-            gaussian_blur_img = img.clone()
-            rotated_img = img.clone()
-
-        return img, gaussian_blur_img, rotated_img, label
+        except:
+            print(f"Error loading image {img_path}, returning white image.")
+            img = np.ones((96, 96, 3), dtype=np.uint8) * 255  # Белое изображение (255 для каждого канала RGB)
+        return img, label
     
+# Define Torchvision transform pipeline    
 img_transforms = transforms.Compose([
+    transforms.Resize((96, 96)),
+    transforms.RandomHorizontalFlip(p=0.5),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.13, 0.31, 0.31], std=[0.5, 0.5, 0.5])
 ])
 
 dataset = MushroomDataset(data_path, transform=img_transforms)
-
 train_size = int(0.8 * len(dataset))
 test_size = len(dataset) - train_size
 train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
-train_dataloader = DataLoader(train_dataset, 32, shuffle=False)
-test_dataloader = DataLoader(test_dataset, 32, shuffle=False)
 
 def build_alexnet():
     def init_weights(m):
@@ -141,53 +118,85 @@ def build_alexnet():
 
 net = build_alexnet()
 net.to(device)
-#print(net)
-del train_dataloader
+
 def train(net, train_loader, device, num_epochs, learning_rate):
     optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=0.9)
     loss_function = torch.nn.CrossEntropyLoss()
     acc_history = []
+    
     scaler = GradScaler()
 
-    with tqdm(total=len(train_loader) * num_epochs, position=0, leave=True) as pbar:
+    with tqdm(total=len(train_loader)*num_epochs, position=0, leave=True) as pbar:
+
         for epoch in range(num_epochs):
             running_loss = 0.0
             correct = 0
-            total = 0
-
-            for batch_num, (inputs, gaussian_blur_imgs, rotated_imgs, labels) in enumerate(train_loader):
-                inputs, gaussian_blur_imgs, rotated_imgs, labels = (
-                    inputs.to(device),
-                    gaussian_blur_imgs.to(device),
-                    rotated_imgs.to(device),
-                    labels.to(device),
-                )
-
-                outputs = net(inputs)  
-
+            total = 0 
+            
+            for batch_num, (inputs, labels) in enumerate(train_loader):
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+                
                 optimizer.zero_grad()
-                with autocast():
+
+                # Mixed Precision Training
+                with autocast():  
+                    outputs = net(inputs)
                     loss = loss_function(outputs, labels)
+
+                # Backpropagation                
                 scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
 
+            
+                scaler.step(optimizer) 
+                scaler.update() 
                 running_loss += loss.item()
-                _, predicted = outputs.max(1)
-                total += labels.size(0)
-                correct += predicted.eq(labels).sum().item()
 
-                pbar.set_description(f"Epoch {epoch}, Loss: {running_loss:.2f}, Accuracy: {100 * correct / total:.2f}%")
+                # Calculate batch Accuracy
+                _, predicted = outputs.max(1)
+                batch_total = labels.size(0)
+                batch_correct = predicted.eq(labels).sum().item()
+                batch_acc = batch_correct/batch_total
+                
+                pbar.set_description("Epoch: %d, Batch: %2d, Loss: %.2f, Acc: %.2f" % (epoch, batch_num, running_loss, batch_acc))
                 pbar.update()
 
-            acc_history.append(correct / total)
+                total += batch_total
+                correct += batch_correct
+
+            # Print the evaluation metric and reset it for the next epoch
+            acc = correct/total 
+            acc_history.append(acc)
+
+        pbar.close()
 
     return acc_history
 
-
+def evaluate_acc(net, test_loader, device):
+    total = 0
+    correct = 0
+    all_labels = []
+    all_preds = []
+    
+    for _, (inputs, labels) in enumerate(test_loader):
+        inputs = inputs.to(device)
+        labels = labels.to(device)
+        
+        outputs = net(inputs)        
+        _, predicted = outputs.max(1)
+        
+        total += labels.size(0)
+        correct += predicted.eq(labels).sum().item()
+        
+        all_labels.extend(labels.cpu().numpy())
+        all_preds.extend(predicted.cpu().numpy())
+    
+    acc = correct / total
+    
+    return acc
 
 if __name__ == '__main__':
-    EPOCHS = 15
+    EPOCHS = 30
     BATCH_SIZE = 64
     LR = 0.0023907002927538432
     train_dataloader = DataLoader(
@@ -202,3 +211,22 @@ if __name__ == '__main__':
     print_history(hist_net, "AlexNet Model Accuracy")
     
     print(hist_net)
+    
+    test_dataloader = DataLoader(
+        test_dataset, 
+        batch_size=BATCH_SIZE,
+        shuffle = True,
+        num_workers=8,
+        prefetch_factor=32
+    )
+        
+    lenet_acc = evaluate_acc(net, test_dataloader, device)
+
+    print('Test Accuracy (AlexNet): {:.2%}'.format(lenet_acc))
+    
+    
+    
+    
+    
+    
+    

@@ -1,0 +1,5 @@
+names:
+  0: Note
+  1: Light
+path: .
+train: train.txt
