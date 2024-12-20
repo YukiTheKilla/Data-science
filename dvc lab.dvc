@@ -3,4 +3,4 @@ outs:
   size: 7714
   nfiles: 1
   hash: md5
-  path: 5 lab
+  path: dvc lab
